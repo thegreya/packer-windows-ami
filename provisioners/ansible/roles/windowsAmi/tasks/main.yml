@@ -1,0 +1,71 @@
+# windowsAmi/tasks
+---
+- name: Enable RDP Registry Key
+  ansible.windows.win_shell: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
+
+- name: Set RDP Firewall rule
+  ansible.windows.win_shell: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+- name: Lookup Ansible password and store it in a fact (Create an SSM Parameter named 'windowsPassword' to use)
+  set_fact:
+    windows_password: "{{ lookup('aws_ssm', 'windowsPassword', region='us-east-1') }}"
+
+- name: Create Admin User
+  win_user:
+      name: sysadmin
+      password: "{{ windows_password }}"
+      groups: Administrators
+      groups_action: add
+
+- name: Create a profile for user sysadmin at C:\Users\sysadmin
+  community.windows.win_user_profile:
+      username: sysadmin
+      name: sysadmin
+      state: present
+
+- name: Reset Host Entry for New User
+  add_host:
+    hostname: 127.0.0.1
+    ansible_user: sysadmin
+    ansible_password: "{{ windows_password }}"
+
+- name: Create Temp Dir
+  win_file:
+    path: C:\temp\bin
+    state: directory
+
+- name: Allow write and execute access to sysadmin
+  ansible.windows.win_acl:
+    user: sysadmin
+    path: C:\temp\bin
+    type: allow
+    rights: ExecuteFile,Write
+
+- name: Download SSM Agent via PowerShell
+  ansible.windows.win_shell: Invoke-WebRequest `https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/windows_amd64/AmazonSSMAgentSetup.exe ` -OutFile $env:USERPROFILE\Desktop\SSMAgent_latest.exe
+
+- name: Start SSM Agent Process via PowerShell
+  ansible.windows.win_shell: Start-Process -FilePath $env:USERPROFILE\Desktop\SSMAgent_latest.exe -ArgumentList "/S"
+
+- name: Cleanup SSM Installer
+  ansible.windows.win_shell: rm -Force $env:USERPROFILE\Desktop\SSMAgent_latest.exe
+
+- name: Initialize Instance
+  raw: 'C:\ProgramData\Amazon\EC2-Windows\Launch\Scripts\InitializeInstance.ps1 -Schedule'
+
+- name: Set Autologon Password Key
+  ansible.windows.win_shell: | 
+    $RegPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+    $DefaultPassword = "{{ windows_password }}"
+    Set-ItemProperty $RegPath "DefaultPassword" -Value "$DefaultPassword" -type String 
+
+- name: Set Autologon User
+  ansible.windows.win_shell: |
+    $RegPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+    $DefaultUsername = "sysadmin"
+    Set-ItemProperty $RegPath "DefaultUsername" -Value "$DefaultUsername" -type String 
+
+- name: Enable AutoAdmin Logon Key
+  ansible.windows.win_shell: |
+    $RegPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+    Set-ItemProperty $RegPath "AutoAdminLogon" -Value "1" -type String 

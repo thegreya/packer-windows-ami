@@ -1,0 +1,8 @@
+---
+- name: Windows AMI playbook
+  hosts: all
+  become: yes
+  become_method: runas
+  become_user: Administrator
+  roles:
+    - windowsAmi
